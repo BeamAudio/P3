@@ -7,8 +7,8 @@
 #include <algorithm>
 
 namespace upc {
-  const float MIN_F0 = 20.0F;    ///< Minimum value of pitch in Hertzs
-  const float MAX_F0 = 10000.0F; ///< Maximum value of pitch in Hertzs
+  const float MIN_F0 = 50.0F;    ///< Minimum value of pitch in Hertzs
+  const float MAX_F0 = 500.0F; ///< Maximum value of pitch in Hertzs
 
   ///
   /// PitchAnalyzer: class that computes the pitch (in Hz) from a signal frame.
@@ -30,6 +30,7 @@ namespace upc {
       samplingFreq, ///< sampling rate (in samples per second). Has to be set in the constructor call
       npitch_min, ///< minimum value of pitch period, in samples
       npitch_max; ///< maximum value of pitch period, in samples
+    float noiseFloordB;
  
 	///
 	/// Computes correlation from lag=0 to r.size()
@@ -39,12 +40,17 @@ namespace upc {
 	///
 	/// Returns the pitch (in Hz) of input frame x
 	///
-    float compute_pitch(std::vector<float> & x) const;
+    float compute_pitch(std::vector<float> & x);
+
+  ///
+  /// Returns normalized frame ZCR
+  ///
+    float compute_zcr(std::vector<float> &x);
 	
 	///
 	/// Returns true is the frame is unvoiced
 	///
-    bool unvoiced(float pot, float r1norm, float rmaxnorm) const;
+    bool unvoiced(float pot, float r1norm, float rmaxnorm, float zcrnorm);
 
 
   public:
@@ -59,12 +65,13 @@ namespace upc {
       samplingFreq = sFreq;
       set_f0_range(min_F0, max_F0);
       set_window(w);
+      noiseFloordB = 0.0f;
     }
 
 	///
     /// Operator (): computes the pitch for the given vector x
 	///
-    float operator()(const std::vector<float> & _x) const {
+    float operator()(const std::vector<float> & _x) {
       if (_x.size() != frameLen)
         return -1.0F;
 
@@ -76,7 +83,7 @@ namespace upc {
     /// Operator (): computes the pitch for the given "C" vector (float *).
     /// N is the size of the vector pointer by pt.
 	///
-    float operator()(const float * pt, unsigned int N) const {
+    float operator()(const float * pt, unsigned int N) {
       if (N != frameLen)
         return -1.0F;
 
@@ -88,7 +95,7 @@ namespace upc {
 	///
     /// Operator (): computes the pitch for the given vector, expressed by the begin and end iterators
 	///
-    float operator()(std::vector<float>::const_iterator begin, std::vector<float>::const_iterator end) const {
+    float operator()(std::vector<float>::const_iterator begin, std::vector<float>::const_iterator end) {
 
       if (end-begin != frameLen)
         return -1.0F;
