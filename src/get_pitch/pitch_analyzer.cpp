@@ -26,6 +26,7 @@ namespace upc {
 
     if (r[0] == 0.0F) //to avoid log() and divide zero 
       r[0] = 1e-10; 
+      
   }
 
   void PitchAnalyzer::set_window(Window win_type) {
@@ -63,35 +64,77 @@ namespace upc {
 
 
   bool PitchAnalyzer::unvoiced(float pot, float r1norm, float rmaxnorm, float zcrnorm) {
-    /// \DONE Implement a rule to decide whether the sound is voiced or not.
-    /// * You can use the standard features (pot, r1norm, rmaxnorm),
-    ///   or compute and use other ones.
+    /// \DONE Automatic Noise Floor Tracking + Hysteresis Logic
+
+    // --- Constants ---
+    // How much louder than the noise floor must the signal be? (e.g., 6dB or 10dB)
+    const float kSignalToNoiseThreshold = 6.0f; 
+    
+    // Hysteresis thresholds (Strict to Start, Loose to Keep)
+    const float kStart_RMax = 0.6f; 
+    const float kStart_ZCR  = 0.2f;
+    const float kKeep_RMax  = 0.4f; 
+    const float kKeep_ZCR   = 0.4f;
+
+    // --- 1. Automatic Noise Floor Tracking (Adaptive) ---
+    
+    // Initialize noiseFloor if it looks uninitialized (e.g., 0 or very low depending on your scale)
+    // Assuming 'pot' is in dB (negative values), -100 is usually a safe start.
+    if (this->noiseFloordB == 0.0f) this->noiseFloordB = pot;
+
+    if (pot < this->noiseFloordB) {
+        // Case A: Current signal is QUIETER than our tracked noise.
+        // Action: Fast Decay. Adapt quickly to this new, lower noise level.
+        // Formula: 90% old, 10% new
+        this->noiseFloordB = 0.90f * this->noiseFloordB + 0.10f * pot;
+    } else {
+        // Case B: Current signal is LOUDER than noise (likely speech).
+        // Action: Slow Attack. Rise very slowly to account for drifting background noise 
+        // without capturing the speech energy as noise.
+        // Formula: 99.9% old, 0.1% new
+        this->noiseFloordB = 0.999f * this->noiseFloordB + 0.001f * pot;
+    }
+
+    // --- 2. The "Gate" Check ---
+    
+    // Calculate actual Signal-to-Noise Ratio
+    float snr = pot - this->noiseFloordB;
+
+    // If SNR is too low, it's automatically unvoiced/silence
+    if (snr < kSignalToNoiseThreshold) {
+        this->prevState = true; // True = Unvoiced/Silence
+        return true;
+    }
+
+    // --- 3. Voicing Classification with Hysteresis ---
+    
+    // Determine if we are currently considering the signal voiced (inverted logic of prevState)
+    bool isVoiced = !this->prevState;
+
+    if (isVoiced) {
+        // We are currently VOICED. Only stop if signal degrades significantly.
+        // Condition to drop to Unvoiced: Low Correlation OR High Frequency Noise
+        if (rmaxnorm < kKeep_RMax || zcrnorm > kKeep_ZCR) {
+            isVoiced = false;
+        }
+    } else {
+        // We are currently UNVOICED. Only start if signal is very clean.
+        // Condition to start Voiced: High Correlation AND Low Frequency Noise
+        if (rmaxnorm >= kStart_RMax && zcrnorm <= kStart_ZCR) {
+            isVoiced = true;
+        }
+    }
+
+    // --- 4. State Updates ---
     this->prevZcr = zcrnorm;
     this->prevR1 = r1norm;
     this->prevRMax = rmaxnorm;
     this->prevPot = pot;
-
-    //if prev state is voiced we just need to compare the parameters with a variation limit to determine if it continues the trend or transitions to unvoiced/silence
-    if(this->prevState == false) {
-      if(pot >= noiseFloordB && abs(prevZcr-zcrnorm)<0.15f && abs(prevR1-r1norm)<0.15f && abs(prevRMax-rmaxnorm)<0.15f) {
-        this->prevState = false;
-        return false;
-      }
-    }
     
-    //if prev state is unvoiced we need to compare the parameters with a variation limit to determine if it transitions to voiced
-    if(r1norm >= 0.5f && rmaxnorm >= 0.4f && pot>=noiseFloordB && zcrnorm<=0.25f) {
+    // Store current state (Remember: function returns true for unvoiced)
+    this->prevState = !isVoiced;
 
-      this-> prevState = false;
-      
-      return false;
-    }
-
-    
-    this->noiseFloordB = 0.8f*pot;
-    this->prevState = true;
-    return true;
-    
+    return !isVoiced; 
   }
 
   float PitchAnalyzer::compute_zcr(vector<float> &x) {
