@@ -38,7 +38,7 @@ namespace upc {
     case HAMMING:
       window.assign(frameLen, 0);
       for(size_t i = 0; i<frameLen; i++) {
-        window[i] = 0.54f - 0.46*cos((2*PI_M*i)/(frameLen-1));
+        window[i] = 0.54f - 0.46f*cos((2*PI_M*i)/(frameLen-1));
       }
       
       
@@ -65,14 +65,30 @@ namespace upc {
     /// \DONE Implement a rule to decide whether the sound is voiced or not.
     /// * You can use the standard features (pot, r1norm, rmaxnorm),
     ///   or compute and use other ones.
+    this->prevZcr = zcrnorm;
+    this->prevR1 = r1norm;
+    this->prevRMax = rmaxnorm;
+    this->prevPot = pot;
 
+    //if prev state is voiced we just need to compare the parameters with a variation limit to determine if it continues the trend or transitions to unvoiced/silence
+    if(this->prevState == false) {
+      if(pot >= noiseFloordB && abs(prevZcr-zcrnorm)<0.15f && abs(prevR1-r1norm)<0.15f && abs(prevRMax-rmaxnorm)<0.15f) {
+        this->prevState = false;
+        return false;
+      }
+    }
     
+    //if prev state is unvoiced we need to compare the parameters with a variation limit to determine if it transitions to voiced
+    if(r1norm >= 0.5f && rmaxnorm >= 0.4f && pot>=noiseFloordB && zcrnorm<=0.25f) {
 
-    if(r1norm >= 0.5 && rmaxnorm >= 0.4 && pot>=noiseFloordB && zcrnorm<=0.25f) {
+      this-> prevState = false;
       
       return false;
     }
-    this->noiseFloordB = 1.2*pot;
+
+    
+    this->noiseFloordB = 0.8f*pot;
+    this->prevState = true;
     return true;
     
   }

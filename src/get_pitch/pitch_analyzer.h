@@ -31,6 +31,8 @@ namespace upc {
       npitch_min, ///< minimum value of pitch period, in samples
       npitch_max; ///< maximum value of pitch period, in samples
     float noiseFloordB;
+    bool prevState; ///< 1 is voiced, 0 is unvoiced
+    float prevZcr, prevR1, prevRMax, prevPot;
  
 	///
 	/// Computes correlation from lag=0 to r.size()
