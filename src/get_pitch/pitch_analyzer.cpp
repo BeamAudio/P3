@@ -12,12 +12,12 @@ using namespace std;
 namespace upc {
   void PitchAnalyzer::autocorrelation(const vector<float> &x, vector<float> &r) const {
 
+    //Preprocessing Normalitzation
+    vector<float> x_norm=x;
+    
+   
     for (unsigned int l = 0; l < r.size(); ++l) {
-  		/**  \DONE Compute the autocorrelation r[l]
-       \f[
-       r[l] = \sum_{i=l}^{N-1} x[i]*x[i-l]
-       \f]
-      */
+  	
       r[l] = 0.0f;
       for (unsigned int i=l; i<x.size(); ++i) {
         r[l] += x[i]*x[i-l];
@@ -30,25 +30,31 @@ namespace upc {
   }
 
   void PitchAnalyzer::set_window(Window win_type) {
-    if (frameLen == 0)
-      return;
+  if (frameLen == 0)
+    return;
 
-    window.resize(frameLen);
+  window.resize(frameLen);
 
-    switch (win_type) {
-    case HAMMING:
-      window.assign(frameLen, 0);
-      for(size_t i = 0; i<frameLen; i++) {
-        window[i] = 0.54f - 0.46f*cos((2*PI_M*i)/(frameLen-1));
-      }
-      
-      
-    case RECT:
-      window.assign(frameLen, 1);
-    default:
-      window.assign(frameLen, 1);
+  switch (win_type) {
+  case HAMMING:
+    for (size_t i = 0; i < frameLen; i++) {
+      window[i] = 0.54f - 0.46f * cos((2 * PI_M * i) / (frameLen - 1));
     }
+    break;
+
+  case RECT:
+    window.assign(frameLen, 1.0f);
+    break;
+
+  default:
+    window.assign(frameLen, 1.0f);
+    break;
   }
+}
+
+
+
+
 
   void PitchAnalyzer::set_f0_range(float min_F0, float max_F0) {
     npitch_min = (unsigned int) samplingFreq/max_F0;
@@ -63,131 +69,135 @@ namespace upc {
   }
 
 
-  bool PitchAnalyzer::unvoiced(float pot, float r1norm, float rmaxnorm, float zcrnorm) {
-    /// \DONE Automatic Noise Floor Tracking + Hysteresis Logic
+bool PitchAnalyzer::unvoiced(float pot, float r1norm, float rmaxnorm, float zcrnorm) {
 
-    // --- Constants ---
-    // How much louder than the noise floor must the signal be? (e.g., 6dB or 10dB)
-    const float kSignalToNoiseThreshold = 6.0f; 
-    
-    // Hysteresis thresholds (Strict to Start, Loose to Keep)
-    const float kStart_RMax = 0.6f; 
-    const float kStart_ZCR  = 0.2f;
-    const float kKeep_RMax  = 0.4f; 
-    const float kKeep_ZCR   = 0.4f;
+    // ========= 1) Normalización de autocorrelación =========
+    // rmaxnorm = r[lag] / r[0]  → mide periodicidad (independiente del volumen)
+    if (rmaxnorm < 0.0f) rmaxnorm = 0.0f;
+    if (rmaxnorm > 1.0f) rmaxnorm = 1.0f;
 
-    // --- 1. Automatic Noise Floor Tracking (Adaptive) ---
-    
-    // Initialize noiseFloor if it looks uninitialized (e.g., 0 or very low depending on your scale)
-    // Assuming 'pot' is in dB (negative values), -100 is usually a safe start.
-    if (this->noiseFloordB == 0.0f) this->noiseFloordB = pot;
+    // ========= 2) Umbrales =========
+    const float SNR_START  = 18.0f;
+    const float SNR_KEEP   = -10.0f;
 
-    if (pot < this->noiseFloordB) {
-        // Case A: Current signal is QUIETER than our tracked noise.
-        // Action: Fast Decay. Adapt quickly to this new, lower noise level.
-        // Formula: 90% old, 10% new
-        this->noiseFloordB = 0.90f * this->noiseFloordB + 0.10f * pot;
-    } else {
-        // Case B: Current signal is LOUDER than noise (likely speech).
-        // Action: Slow Attack. Rise very slowly to account for drifting background noise 
-        // without capturing the speech energy as noise.
-        // Formula: 99.9% old, 0.1% new
-        this->noiseFloordB = 0.999f * this->noiseFloordB + 0.001f * pot;
-    }
+    const float RMAX_START = 0.42f;   // entrar voiced
+    const float RMAX_KEEP  = 0.34f;   // mantener voiced
 
-    // --- 2. The "Gate" Check ---
-    
-    // Calculate actual Signal-to-Noise Ratio
-    float snr = pot - this->noiseFloordB;
+    const float ZCR_START  = 0.14f;
+    const float ZCR_KEEP   = 0.55f;
 
-    // If SNR is too low, it's automatically unvoiced/silence
-    if (snr < kSignalToNoiseThreshold) {
-        this->prevState = true; // True = Unvoiced/Silence
-        return true;
-    }
 
-    // --- 3. Voicing Classification with Hysteresis ---
-    
-    // Determine if we are currently considering the signal voiced (inverted logic of prevState)
-    bool isVoiced = !this->prevState;
+    // ========= 3) Limitar potencia =========
+    if (pot < -100.0f) pot = -100.0f;
+    if (pot >   20.0f) pot =  20.0f;
 
+    // ========= 4) Inicializar ruido =========
+    if (noiseFloordB < -1e8f)
+        noiseFloordB = pot;
+
+    float snr = pot - noiseFloordB;
+
+    bool isVoiced = !prevState;
+
+    // ========= 5) Histéresis =========
     if (isVoiced) {
-        // We are currently VOICED. Only stop if signal degrades significantly.
-        // Condition to drop to Unvoiced: Low Correlation OR High Frequency Noise
-        if (rmaxnorm < kKeep_RMax || zcrnorm > kKeep_ZCR) {
+        // salir de voiced
+        if (snr < SNR_KEEP || rmaxnorm < RMAX_KEEP || zcrnorm > ZCR_KEEP)
             isVoiced = false;
-        }
     } else {
-        // We are currently UNVOICED. Only start if signal is very clean.
-        // Condition to start Voiced: High Correlation AND Low Frequency Noise
-        if (rmaxnorm >= kStart_RMax && zcrnorm <= kStart_ZCR) {
+        // entrar en voiced
+        if (snr >= SNR_START && rmaxnorm >= RMAX_START && zcrnorm <= ZCR_START)
             isVoiced = true;
+    }
+
+    bool isUnvoiced = !isVoiced;
+
+    // ========= 6) Actualizar ruido SOLO en unvoiced =========
+    if (isUnvoiced) {
+        noiseFloordB = (pot < noiseFloordB)
+            ? 0.90f  * noiseFloordB + 0.10f  * pot
+            : 0.999f * noiseFloordB + 0.001f * pot;
+    }
+
+    prevState = isUnvoiced;
+    return isUnvoiced;   // true = unvoiced
+}
+
+
+
+
+
+
+    float PitchAnalyzer::compute_zcr(vector<float> &x) {
+      if (x.size() != frameLen)
+        return -1.0F;
+
+      unsigned int abszcr = 0;
+      
+      for(size_t i=1; i<frameLen; i++) {
+        if(x[i]*x[i-1]<=0) {
+          abszcr++;
         }
-    }
-
-    // --- 4. State Updates ---
-    this->prevZcr = zcrnorm;
-    this->prevR1 = r1norm;
-    this->prevRMax = rmaxnorm;
-    this->prevPot = pot;
-    
-    // Store current state (Remember: function returns true for unvoiced)
-    this->prevState = !isVoiced;
-
-    return !isVoiced; 
-  }
-
-  float PitchAnalyzer::compute_zcr(vector<float> &x) {
-    if (x.size() != frameLen)
-      return -1.0F;
-
-    unsigned int abszcr = 0;
-    
-    for(size_t i=1; i<frameLen; i++) {
-      if(x[i]*x[i-1]<=0) {
-        abszcr++;
       }
+
+      return (float)((float)abszcr/(float)frameLen); 
     }
 
-    return (float)((float)abszcr/(float)frameLen); 
-  }
 
-  float PitchAnalyzer::compute_pitch(vector<float> & x) {
-    if (x.size() != frameLen)
-      return -1.0F;
 
-    //Window input frame
-    for (unsigned int i=0; i<x.size(); ++i)
-      x[i] *= window[i];
 
-    vector<float> r(npitch_max);
+ float PitchAnalyzer::compute_pitch(std::vector<float> &x) {
+    if (x.size() != frameLen) return -1.0f;
 
-    //Compute correlation
+    // 1) Ventana
+    for (unsigned int i = 0; i < x.size(); ++i)
+        x[i] *= window[i];
+
+    // 2) Autocorrelación
+    std::vector<float> r(npitch_max);
     autocorrelation(x, r);
 
-    unsigned int lag = 0;
-    float rMax = 0.0f;
-
-    for(size_t i = npitch_min; i<npitch_max; i++) {
-      if(r[i] > rMax) {
-        rMax = r[i];
-        lag = i;
-      }
+    // 3) Buscar desde el primer cruce a negativo (para no coger el lóbulo del origen)
+    unsigned int start = npitch_min;
+    for (unsigned int i = 1; i < npitch_max; ++i) {
+        if (r[i] < 0.0f) { start = std::max(start, i); break; }
     }
 
+    // 4) Máximo global en [start, npitch_max)
+    unsigned int lag = start;
+    float rMax = r[start];
+    for (unsigned int i = start; i < npitch_max; ++i) {
+        if (r[i] > rMax) { rMax = r[i]; lag = i; }
+    }
+
+    // 5) Chequeo armónico simple: si 2*lag también es pico fuerte, quizá el fundamental es 2*lag
+    if (2 * lag < npitch_max) {
+        if (r[2 * lag] >= 0.90f * r[lag]) { // 0.90 ajustable
+            lag = 2 * lag;
+        }
+    }
+
+    // 6) Potencia + decisión voiced/unvoiced
+    float pot = 10.0f * log10(r[0]);
+
+    if (unvoiced(pot, r[1] / r[0], r[lag] / r[0], compute_zcr(x)))
+        return 0.0f;
+
+    return (float)samplingFreq / (float)lag;
+}
+
+
+
+
+  
     
 
-    float pot = 10 * log10(r[0]);
+   
+
+    
+      
+
 
  
-#if 0
-    if (r[0] > 0.0F)
-      cout << pot << '\t' << r[1]/r[0] << '\t' << r[lag]/r[0] << endl;
-#endif
-    
-    if (unvoiced(pot, r[1]/r[0], r[lag]/r[0], compute_zcr(x)))
-      return 0;
-    else
-      return (float) samplingFreq/(float) lag;
-  }
+
 }

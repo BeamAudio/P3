@@ -1,5 +1,7 @@
 /// @file
 
+/// @file
+
 #include <iostream>
 #include <fstream>
 #include <string.h>
@@ -36,58 +38,76 @@ Arguments:
 )";
 
 int main(int argc, const char *argv[]) {
-	/// \TODO 
-	///  Modify the program syntax and the call to **docopt()** in order to
-	///  add options and arguments to the program.
-    std::map<std::string, docopt::value> args = docopt::docopt(USAGE,
-        {argv + 1, argv + argc},	// array of arguments, without the program name
-        true,    // show help if requested
-        "2.0");  // version string
 
-	std::string input_wav = args["<input-wav>"].asString();
-	std::string output_txt = args["<output-txt>"].asString();
+    std::map<std::string, docopt::value> args = docopt::docopt(
+        USAGE,
+        {argv + 1, argv + argc},  // array of arguments, without the program name
+        true,                     // show help if requested
+        "2.0"                     // version string
+    );
 
-  // Read input sound file
-  unsigned int rate;
-  vector<float> x;
-  if (readwav_mono(input_wav, rate, x) != 0) {
-    cerr << "Error reading input file " << input_wav << " (" << strerror(errno) << ")\n";
-    return -2;
-  }
+    std::string input_wav  = args["<input-wav>"].asString();
+    std::string output_txt = args["<output-txt>"].asString();
 
-  int n_len = rate * FRAME_LEN;
-  int n_shift = rate * FRAME_SHIFT;
+    // Leer fichero de audio
+    unsigned int rate;
+    vector<float> x;
+    if (readwav_mono(input_wav, rate, x) != 0) {
+        cerr << "Error reading input file " << input_wav
+             << " (" << strerror(errno) << ")\n";
+        return -2;
+    }
 
-  // Define analyzer
-  PitchAnalyzer analyzer(n_len, rate, PitchAnalyzer::RECT, 50, 500);
+    int n_len   = rate * FRAME_LEN;
+    int n_shift = rate * FRAME_SHIFT;
 
-  /// \TODO
-  /// Preprocess the input signal in order to ease pitch estimation. For instance,
-  /// central-clipping or low pass filtering may be used.
-  
-  // Iterate for each frame and save values in f0 vector
-  vector<float>::iterator iX;
-  vector<float> f0;
-  for (iX = x.begin(); iX + n_len < x.end(); iX = iX + n_shift) {
-    float f = analyzer(iX, iX + n_len);
-    f0.push_back(f);
-  }
+    // Definir analizador (ventana HAMMING)
+    PitchAnalyzer analyzer(n_len, rate, PitchAnalyzer::HAMMING, 50, 500);
 
-  /// \TODO
-  /// Postprocess the estimation in order to supress errors. For instance, a median filter
-  /// or time-warping may be used.
+    // Iterar por frames y guardar f0
+    vector<float>::iterator iX;
+    vector<float> f0;
+    for (iX = x.begin(); iX + n_len < x.end(); iX = iX + n_shift) {
+        float f = analyzer(iX, iX + n_len);
+        f0.push_back(f);
+    }
 
-  // Write f0 contour into the output file
-  ofstream os(output_txt);
-  if (!os.good()) {
-    cerr << "Error reading output file " << output_txt << " (" << strerror(errno) << ")\n";
-    return -3;
-  }
+    // ======================================================
+    // Filtro postprocesado mediana
+    if (f0.size() >= 3) {
+        std::vector<float> f0_smooth = f0;
 
-  os << 0 << '\n'; //pitch at t=0
-  for (iX = f0.begin(); iX != f0.end(); ++iX) 
-    os << *iX << '\n';
-  os << 0 << '\n';//pitch at t=Dur
+        for (size_t i = 1; i + 1 < f0.size(); ++i) {
+            float prev = f0[i - 1];
+            float cur  = f0[i];
+            float next = f0[i + 1];
 
-  return 0;
+            // isla de un frame voiced: 0, f, 0 -> 0,0,0
+            if (prev == 0.0f && next == 0.0f && cur > 0.0f) {
+                f0_smooth[i] = 0.0f;
+            }
+
+            // hueco unvoiced entre voiced: f,0,f -> f, (f+f)/2, f
+            if (prev > 0.0f && next > 0.0f && cur == 0.0f) {
+                f0_smooth[i] = 0.5f * (prev + next);
+            }
+        }
+
+        f0.swap(f0_smooth);
+    }
+
+    // Escribir contorno de f0 (ya postprocesado)
+    ofstream os(output_txt);
+    if (!os.good()) {
+        cerr << "Error reading output file " << output_txt
+             << " (" << strerror(errno) << ")\n";
+        return -3;
+    }
+
+    os << 0 << '\n'; // pitch at t=0
+    for (iX = f0.begin(); iX != f0.end(); ++iX)
+        os << *iX << '\n';
+    os << 0 << '\n'; // pitch at t=Dur
+
+    return 0;
 }
